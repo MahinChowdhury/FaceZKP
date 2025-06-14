@@ -7,11 +7,17 @@ export default function RootLayout() {
       <StatusBar style="light" />
       <Stack
         screenOptions={{
-          headerShown: false, // Hide header for custom design
+          headerShown: false,
         }}
       >
         <Stack.Screen 
           name="index"
+          options={{
+            title: 'Login',
+          }}
+        />
+        <Stack.Screen 
+          name="register"
           options={{
             title: 'Create Account',
           }}
