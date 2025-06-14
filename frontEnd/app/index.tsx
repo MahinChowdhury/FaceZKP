@@ -1,17 +1,18 @@
-import React, { useState, useRef } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Alert,
-  ScrollView,
-  Image,
-} from 'react-native';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
-import { useRouter } from 'expo-router';
-import { StyleSheet, Dimensions } from 'react-native';
-import * as ImageManipulator from 'expo-image-manipulator';
 import axios from 'axios';
+import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
+import * as ImageManipulator from 'expo-image-manipulator';
+import { useRouter } from 'expo-router';
+import React, { useRef, useState } from 'react';
+import {
+    Alert,
+    Dimensions,
+    Image,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 
 const { width, height } = Dimensions.get('window');
 
@@ -21,7 +22,7 @@ interface CapturedImage {
   base64?: string;
 }
 
-export default function Login() {
+export default function LoginScreen() {
   const [nidImage, setNidImage] = useState<CapturedImage | null>(null);
   const [faceImage, setFaceImage] = useState<CapturedImage | null>(null);
   const [showCamera, setShowCamera] = useState(false);

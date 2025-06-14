@@ -1,18 +1,19 @@
-import React, { useState, useRef } from 'react';
-import {
-  View,
-  Text,
-  TouchableOpacity,
-  Image,
-  Alert,
-  ScrollView,
-  Dimensions,
-  StyleSheet,
-} from 'react-native';
+import { AppKitButton } from "@reown/appkit-ethers5-react-native";
 import axios from 'axios';
-import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
-import * as ImagePicker from 'expo-image-picker';
+import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';
+import * as ImagePicker from 'expo-image-picker';
+import React, { useRef, useState } from 'react';
+import {
+    Alert,
+    Dimensions,
+    Image,
+    ScrollView,
+    StyleSheet,
+    Text,
+    TouchableOpacity,
+    View,
+} from 'react-native';
 
 const { width, height } = Dimensions.get('window');
 
@@ -22,7 +23,7 @@ interface CapturedImage {
   base64?: string;
 }
 
-export default function Register() {
+export default function RegisterScreen() {
   const [nidImage, setNidImage] = useState<CapturedImage | null>(null);
   const [faceImage, setFaceImage] = useState<CapturedImage | null>(null);
   const [showCamera, setShowCamera] = useState(false);
@@ -359,6 +360,18 @@ export default function Register() {
         </View>
       </View>
 
+      {/* Connect Wallet */}
+      <View style={styles.section}>
+        <Text style={styles.sectionTitle}>Wallet Connection</Text>
+        <Text style={styles.sectionDescription}>Connect your wallet to complete the registration process</Text>
+
+        <View style={[styles.uploadBox, styles.walletBox]}>
+          <View style={styles.uploadContent}>
+            <AppKitButton />
+          </View>
+        </View>
+      </View>
+
       {/* Submit */}
       <TouchableOpacity
         style={[
@@ -423,7 +436,7 @@ const styles = StyleSheet.create({
   },
   uploadBox: {
     width: '100%',
-    height: 200,
+    height: 100,
     borderWidth: 2,
     borderColor: '#ddd',
     borderStyle: 'dashed',
@@ -603,5 +616,10 @@ const styles = StyleSheet.create({
     height: 60,
     borderRadius: 30,
     backgroundColor: '#fff',
+  },
+  walletBox: {
+    borderColor: '#2196F3',
+    backgroundColor: '#f8f9ff',
+    padding: 20,
   },
 });

@@ -1,9 +1,11 @@
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
+import { SafeAreaProvider } from 'react-native-safe-area-context';
+import { AppKit } from './config/appkit';
 
 export default function RootLayout() {
   return (
-    <>
+    <SafeAreaProvider>
       <StatusBar style="light" />
       <Stack
         screenOptions={{
@@ -23,6 +25,7 @@ export default function RootLayout() {
           }}
         />
       </Stack>
-    </>
+      <AppKit />
+    </SafeAreaProvider>
   );
-}
+} 
