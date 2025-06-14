@@ -9,8 +9,10 @@ import {
   Dimensions,
   StyleSheet,
 } from 'react-native';
+import axios from 'axios';
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import * as ImagePicker from 'expo-image-picker';
+import * as ImageManipulator from 'expo-image-manipulator';
 
 const { width, height } = Dimensions.get('window');
 
@@ -26,6 +28,7 @@ export default function Register() {
   const [showCamera, setShowCamera] = useState(false);
   const [cameraType, setCameraType] = useState<CameraType>('back');
   const [currentCapture, setCurrentCapture] = useState<'nid' | 'face' | ''>('');
+  const [loading, setLoading] = useState(false);
   
   // Use the new Expo Camera hook for permissions
   const [permission, requestPermission] = useCameraPermissions();
@@ -56,29 +59,107 @@ export default function Register() {
     setShowCamera(true);
   };
 
+  // Function to crop image based on frame dimensions
+  const cropImage = async (imageUri: string, captureType: 'nid' | 'face') => {
+    try {
+      // Get original image dimensions
+      const imageInfo = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [],
+        { format: ImageManipulator.SaveFormat.JPEG }
+      );
+
+      const originalWidth = imageInfo.width;
+      const originalHeight = imageInfo.height;
+
+      // Calculate crop parameters based on frame size and screen dimensions
+      let cropParams;
+      
+      if (captureType === 'nid') {
+        // NID frame dimensions: width * 0.9, height * 0.6
+        const frameWidth = width * 0.9;
+        const frameHeight = width * 0.6;
+        
+        // Calculate crop area (center the crop)
+        const cropWidth = (frameWidth / width) * originalWidth;
+        const cropHeight = (frameHeight / height) * originalHeight;
+        const cropX = (originalWidth - cropWidth) / 2;
+        const cropY = (originalHeight - cropHeight) / 2;
+        
+        cropParams = {
+          originX: Math.max(0, cropX),
+          originY: Math.max(0, cropY),
+          width: Math.min(cropWidth, originalWidth),
+          height: Math.min(cropHeight, originalHeight),
+        };
+      } else {
+        // Face frame dimensions: width * 0.9, height * 1.4 (oval shape)
+        const frameWidth = width * 0.9;
+        const frameHeight = width * 1.4;
+        
+        // Calculate crop area (center the crop)
+        const cropWidth = (frameWidth / width) * originalWidth;
+        const cropHeight = (frameHeight / height) * originalHeight;
+        const cropX = (originalWidth - cropWidth) / 2;
+        const cropY = (originalHeight - cropHeight) / 2;
+        
+        cropParams = {
+          originX: Math.max(0, cropX),
+          originY: Math.max(0, cropY),
+          width: Math.min(cropWidth, originalWidth),
+          height: Math.min(cropHeight, originalHeight),
+        };
+      }
+
+      // Perform the crop
+      const croppedImage = await ImageManipulator.manipulateAsync(
+        imageUri,
+        [
+          {
+            crop: cropParams,
+          },
+        ],
+        {
+          compress: 0.8,
+          format: ImageManipulator.SaveFormat.JPEG,
+          base64: true,
+        }
+      );
+
+      return {
+        uri: croppedImage.uri,
+        base64: croppedImage.base64,
+      };
+    } catch (error) {
+      console.error('Crop error:', error);
+      // If cropping fails, return original image
+      return {
+        uri: imageUri,
+      };
+    }
+  };
+
   const takePicture = async () => {
     if (cameraRef.current) {
       try {
         const photo = await cameraRef.current.takePictureAsync({
           quality: 0.8,
-          base64: true,
+          base64: false, // We'll get base64 from cropping
           skipProcessing: true,
         });
 
         if (photo) {
-          const imageData: CapturedImage = {
-            uri: photo.uri,
-            base64: photo.base64,
-          };
+          // Crop the image based on the frame
+          const croppedImage = await cropImage(photo.uri, currentCapture as 'nid' | 'face');
 
           if (currentCapture === 'nid') {
-            setNidImage(imageData);
+            setNidImage(croppedImage);
           } else {
-            setFaceImage(imageData);
+            setFaceImage(croppedImage);
           }
 
           setShowCamera(false);
-          Alert.alert('Success', 'Photo captured successfully!');
+          Alert.alert('Success', 'Photo captured and cropped successfully!');
         }
       } catch (error) {
         console.error('Camera error:', error);
@@ -99,26 +180,25 @@ export default function Register() {
       mediaTypes: ImagePicker.MediaTypeOptions.Images,
       allowsEditing: true,
       aspect: type === 'nid' ? [16, 10] : [1, 1],
-      quality: 0.8,
-      base64: true,
+      quality: 0.7,
+      base64: false, // We'll get base64 from cropping if needed
     });
 
     if (!result.canceled && result.assets?.[0]) {
       const selected = result.assets[0];
-      const imageData: CapturedImage = {
-        uri: selected.uri,
-        base64: selected.base64 ?? undefined,
-      };
+      
+      // Crop the selected image based on the frame
+      const croppedImage = await cropImage(selected.uri, type);
 
       if (type === 'nid') {
-        setNidImage(imageData);
+        setNidImage(croppedImage);
       } else {
-        setFaceImage(imageData);
+        setFaceImage(croppedImage);
       }
     }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!nidImage) {
       Alert.alert('Missing Information', 'Please capture your NID card photo');
       return;
@@ -128,18 +208,42 @@ export default function Register() {
       return;
     }
 
-    Alert.alert('Success', 'Registration submitted successfully!', [
-      {
-        text: 'OK',
-        onPress: () => {
-          console.log('Submitted data:', {
-            nidImage: nidImage.uri || nidImage.base64,
-            faceImage: faceImage.uri || faceImage.base64,
-          });
+    setLoading(true); // Start loading
+
+    try {
+      const formData = new FormData();
+      formData.append('nidImage', {
+        uri: nidImage.uri,
+        name: 'nid.jpg',
+        type: 'image/jpeg',
+      } as any);
+      formData.append('faceImage', {
+        uri: faceImage.uri,
+        name: 'face.jpg',
+        type: 'image/jpeg',
+      } as any);
+
+      const response = await axios.post('http://192.168.0.241:3000/api/v1/register', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
         },
-      },
-    ]);
-  };
+      });
+
+      Alert.alert('Success', 'Registration submitted successfully!', [
+        {
+          text: 'OK',
+          onPress: () => {
+            console.log('Submitted data:', response.data);
+          },
+        },
+      ]);
+    } catch (error) {
+      console.error('Upload error:', error);
+      Alert.alert('Upload Failed', 'Something went wrong while uploading.');
+    } finally {
+      setLoading(false); // Stop loading
+    }
+}; 
 
   if (showCamera) {
     return (
@@ -196,7 +300,7 @@ export default function Register() {
       {/* NID Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>NID Card Photo</Text>
-        <Text style={styles.sectionDescription}>Capture a clear photo of your National ID card</Text>
+        <Text style={styles.sectionDescription}>Capture a clear photo of your National ID card (will be cropped to frame size)</Text>
 
         <TouchableOpacity
           style={[styles.uploadBox, nidImage && styles.uploadBoxFilled]}
@@ -227,7 +331,7 @@ export default function Register() {
       {/* Face Section */}
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>Face Verification</Text>
-        <Text style={styles.sectionDescription}>Capture a clear photo of your face</Text>
+        <Text style={styles.sectionDescription}>Capture a clear photo of your face (will be cropped to frame size)</Text>
 
         <TouchableOpacity
           style={[styles.uploadBox, faceImage && styles.uploadBoxFilled]}
@@ -256,8 +360,17 @@ export default function Register() {
       </View>
 
       {/* Submit */}
-      <TouchableOpacity style={styles.submitButton} onPress={handleSubmit}>
-        <Text style={styles.submitButtonText}>Complete Registration</Text>
+      <TouchableOpacity
+        style={[
+          styles.submitButton,
+          loading && { backgroundColor: 'gray' }  // override color when loading
+        ]}
+        onPress={handleSubmit}
+        disabled={loading}
+      >
+        <Text style={styles.submitButtonText}>
+          {loading ? 'Submitting...' : 'Complete Registration'}
+        </Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -356,7 +469,7 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingVertical: 12,
     paddingHorizontal: 20,
-    backgroundColor: '#ff9800',
+    backgroundColor: '#db1425',
     borderRadius: 8,
     alignItems: 'center',
   },
@@ -364,6 +477,7 @@ const styles = StyleSheet.create({
     color: '#fff',
     fontSize: 14,
     fontWeight: '600',
+    marginTop : 7,
   },
   galleryButton: {
     flex: 1,

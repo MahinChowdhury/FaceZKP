@@ -10,6 +10,8 @@ import {
 import { CameraView, CameraType, useCameraPermissions } from 'expo-camera';
 import { useRouter } from 'expo-router';
 import { StyleSheet, Dimensions } from 'react-native';
+import * as ImageManipulator from 'expo-image-manipulator';
+import axios from 'axios';
 
 const { width, height } = Dimensions.get('window');
 
@@ -26,6 +28,7 @@ export default function Login() {
   const [cameraType, setCameraType] = useState<CameraType>('back');
   const [currentCapture, setCurrentCapture] = useState<'nid' | 'face' | ''>('');
   const [isLoading, setIsLoading] = useState(false);
+
   
   // Use the new Expo Camera hook for permissions
   const [permission, requestPermission] = useCameraPermissions();
@@ -46,6 +49,85 @@ export default function Login() {
     }
   };
 
+  const cropImage = async (imageUri: string, captureType: 'nid' | 'face') => {
+      try {
+        // Get original image dimensions
+        const imageInfo = await ImageManipulator.manipulateAsync(
+          imageUri,
+          [],
+          { format: ImageManipulator.SaveFormat.JPEG }
+        );
+  
+        const originalWidth = imageInfo.width;
+        const originalHeight = imageInfo.height;
+  
+        // Calculate crop parameters based on frame size and screen dimensions
+        let cropParams;
+        
+        if (captureType === 'nid') {
+          // NID frame dimensions: width * 0.9, height * 0.6
+          const frameWidth = width * 0.9;
+          const frameHeight = width * 0.6;
+          
+          // Calculate crop area (center the crop)
+          const cropWidth = (frameWidth / width) * originalWidth;
+          const cropHeight = (frameHeight / height) * originalHeight;
+          const cropX = (originalWidth - cropWidth) / 2;
+          const cropY = (originalHeight - cropHeight) / 2;
+          
+          cropParams = {
+            originX: Math.max(0, cropX),
+            originY: Math.max(0, cropY),
+            width: Math.min(cropWidth, originalWidth),
+            height: Math.min(cropHeight, originalHeight),
+          };
+        } else {
+          // Face frame dimensions: width * 0.9, height * 1.4 (oval shape)
+          const frameWidth = width * 0.9;
+          const frameHeight = width * 1.4;
+          
+          // Calculate crop area (center the crop)
+          const cropWidth = (frameWidth / width) * originalWidth;
+          const cropHeight = (frameHeight / height) * originalHeight;
+          const cropX = (originalWidth - cropWidth) / 2;
+          const cropY = (originalHeight - cropHeight) / 2;
+          
+          cropParams = {
+            originX: Math.max(0, cropX),
+            originY: Math.max(0, cropY),
+            width: Math.min(cropWidth, originalWidth),
+            height: Math.min(cropHeight, originalHeight),
+          };
+        }
+  
+        // Perform the crop
+        const croppedImage = await ImageManipulator.manipulateAsync(
+          imageUri,
+          [
+            {
+              crop: cropParams,
+            },
+          ],
+          {
+            compress: 0.8,
+            format: ImageManipulator.SaveFormat.JPEG,
+            base64: true,
+          }
+        );
+  
+        return {
+          uri: croppedImage.uri,
+          base64: croppedImage.base64,
+        };
+      } catch (error) {
+        console.error('Crop error:', error);
+        // If cropping fails, return original image
+        return {
+          uri: imageUri,
+        };
+      }
+    };
+
   const openCamera = async (type: 'nid' | 'face') => {
     const granted = await requestCameraPermission();
     if (!granted) {
@@ -58,36 +140,33 @@ export default function Login() {
   };
 
   const takePicture = async () => {
-    if (cameraRef.current) {
-      try {
-        const photo = await cameraRef.current.takePictureAsync({
-          quality: 0.8,
-          base64: true,
-          skipProcessing: true,
-        });
-
-        if (photo) {
-          const imageData: CapturedImage = {
-            uri: photo.uri,
-            base64: photo.base64,
-          };
-
-          if (currentCapture === 'nid') {
-            setNidImage(imageData);
-            Alert.alert('Success', 'NID card captured successfully!');
-          } else {
-            setFaceImage(imageData);
-            Alert.alert('Success', 'Face photo captured successfully!');
+      if (cameraRef.current) {
+        try {
+          const photo = await cameraRef.current.takePictureAsync({
+            quality: 0.8,
+            base64: false, // We'll get base64 from cropping
+            skipProcessing: true,
+          });
+  
+          if (photo) {
+            // Crop the image based on the frame
+            const croppedImage = await cropImage(photo.uri, currentCapture as 'nid' | 'face');
+  
+            if (currentCapture === 'nid') {
+              setNidImage(croppedImage);
+            } else {
+              setFaceImage(croppedImage);
+            }
+  
+            setShowCamera(false);
+            Alert.alert('Success', 'Photo captured and cropped successfully!');
           }
-
-          setShowCamera(false);
+        } catch (error) {
+          console.error('Camera error:', error);
+          Alert.alert('Error', 'Failed to capture photo');
         }
-      } catch (error) {
-        console.error('Camera error:', error);
-        Alert.alert('Error', 'Failed to capture photo');
       }
-    }
-  };
+    };
 
   const handleLogin = async () => {
     if (!nidImage) {
@@ -100,21 +179,47 @@ export default function Login() {
     }
 
     setIsLoading(true);
-    
-    // Simulate biometric verification process
-    setTimeout(() => {
-      setIsLoading(false);
+
+    try {
+      // Prepare form data
+      const formData = new FormData();
+      formData.append('nidImage', {
+        uri: nidImage.uri,
+        name: 'nid.jpg',
+        type: 'image/jpeg',
+      } as any);
+      formData.append('faceImage', {
+        uri: faceImage.uri,
+        name: 'face.jpg',
+        type: 'image/jpeg',
+      } as any);
+
+      // Send POST request to backend login endpoint
+      const response = await axios.post('http://192.168.0.241:3000/api/v1/login', formData, {
+        headers: {
+          'Content-Type': 'multipart/form-data',
+        },
+      });
+
+      // Handle success
       Alert.alert('Login Successful', 'Face and NID verification completed!', [
         {
           text: 'Continue',
           onPress: () => {
-            console.log('Login successful with biometric data');
+            console.log('Login successful with biometric data:', response.data);
             // Navigate to main app here
           },
         },
       ]);
-    }, 2000);
+    } catch (error) {
+      console.error('Login error:', error);
+      Alert.alert('Login Failed', 'An error occurred during login.');
+    } finally {
+      setIsLoading(false);
+    }
   };
+
+
 
   const resetCapture = (type: 'nid' | 'face') => {
     if (type === 'nid') {
