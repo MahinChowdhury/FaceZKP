@@ -7,23 +7,12 @@ module.exports = function (api) {
       }]
     ],
     plugins: [
-      // Add any existing plugins here
+      'react-native-reanimated/plugin',
     ],
     env: {
       production: {
         plugins: ['react-native-paper/babel'],
       },
-    },
-    // Add the unstable_transformImportMeta option to the preset
-    overrides: [
-      {
-        test: './node_modules/valtio',
-        plugins: [
-          ['@babel/plugin-transform-runtime', {
-            unstable_transformImportMeta: true
-          }]
-        ]
-      }
-    ]
+    }
   };
 }; 

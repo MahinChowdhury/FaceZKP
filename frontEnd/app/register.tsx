@@ -1,4 +1,4 @@
-import { AppKitButton } from "@reown/appkit-ethers5-react-native";
+import { AppKitButton } from "@reown/appkit-ethers-react-native";
 import axios from 'axios';
 import { CameraType, CameraView, useCameraPermissions } from 'expo-camera';
 import * as ImageManipulator from 'expo-image-manipulator';

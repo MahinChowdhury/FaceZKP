@@ -95,6 +95,14 @@ android {
         versionCode 1
         versionName "1.0.0"
     }
+
+    // Add configuration for react-native-camera
+    configurations.all {
+        resolutionStrategy {
+            force 'com.facebook.react:react-native-camera:general'
+        }
+    }
+
     signingConfigs {
         debug {
             storeFile file('debug.keystore')

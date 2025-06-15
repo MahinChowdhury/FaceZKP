@@ -1,11 +1,9 @@
-import "@ethersproject/shims";
 import "@walletconnect/react-native-compat";
-
 import {
-  AppKit,
   createAppKit,
   defaultConfig,
-} from "@reown/appkit-ethers5-react-native";
+  AppKit,
+} from "@reown/appkit-ethers-react-native";
 
 // 1. Get projectId from https://cloud.reown.com
 const projectId = "23cbac49d00fd39160026bce7d20905d";
