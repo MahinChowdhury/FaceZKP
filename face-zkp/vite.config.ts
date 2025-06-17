@@ -5,7 +5,14 @@ import react from '@vitejs/plugin-react'
 export default defineConfig({
   plugins: [react()],
   server: {
-    host: true,
+    host: '0.0.0.0', // Allow external connections
     port: 5173,
+    // https: true  // Disabled for ngrok tunnel
+    allowedHosts: [
+      'localhost',
+      '127.0.0.1',
+      '.ngrok-free.app', // Allow all ngrok domains
+      'dff2-118-179-48-72.ngrok-free.app' // Your specific ngrok domain
+    ]
   }
 })
