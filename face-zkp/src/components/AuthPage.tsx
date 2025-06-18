@@ -1,10 +1,19 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Eye, EyeOff, Fingerprint, ArrowLeft, Camera, Upload, QrCode, Scan, CheckCircle, AlertCircle, RotateCcw, X } from 'lucide-react';
+import { Eye, EyeOff, Fingerprint, ArrowLeft, Camera, Upload, QrCode, Scan, CheckCircle, AlertCircle, RotateCcw, X, Crop } from 'lucide-react';
+import axios from 'axios';
+import WalletConnect from './WalletConnect';
 
 interface FormData {
   nidPhoto?: File;
   facePhoto?: File;
   qrCode?: File;
+}
+
+interface CropData {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
 }
 
 const AuthPage: React.FC = () => {
@@ -15,10 +24,22 @@ const AuthPage: React.FC = () => {
   const [capturedImages, setCapturedImages] = useState<{[key: string]: string}>({});
   const [cameraError, setCameraError] = useState<string>('');
   const [isVideoReady, setIsVideoReady] = useState(false);
+  const [successMessage, setSuccessMessage] = useState<string>('');
+  const [errorMessage, setErrorMessage] = useState<string>('');
+  
+  // Cropping state
+  const [isCropping, setIsCropping] = useState(false);
+  const [cropImage, setCropImage] = useState<string>('');
+  const [cropType, setCropType] = useState<'nid' | 'face' | 'qr' | null>(null);
+  const [cropData, setCropData] = useState<CropData>({ x: 0, y: 0, width: 200, height: 200 });
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   
   const videoRef = useRef<HTMLVideoElement>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const cropCanvasRef = useRef<HTMLCanvasElement>(null);
+  const cropContainerRef = useRef<HTMLDivElement>(null);
 
   const startCamera = useCallback(async (type: 'nid' | 'face' | 'qr') => {
     setCameraError('');
@@ -197,28 +218,188 @@ const AuthPage: React.FC = () => {
         context.drawImage(video, 0, 0, canvas.width, canvas.height);
         const imageData = canvas.toDataURL('image/jpeg', 0.8);
         
-        setCapturedImages(prev => ({
-          ...prev,
-          [activeCamera]: imageData
-        }));
-        
-        // Convert to file
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const file = new File([blob], `${activeCamera}-capture.jpg`, { type: 'image/jpeg' });
-            setFormData(prev => ({
-              ...prev,
-              [`${activeCamera}Photo`]: file
-            }));
-          }
-        }, 'image/jpeg', 0.8);
-        
+        // Show cropping modal instead of directly saving
+        setCropImage(imageData);
+        setCropType(activeCamera);
+        setIsCropping(true);
         stopCamera();
       } else {
         setCameraError('Failed to capture photo. Please try again.');
       }
     }
   }, [activeCamera, stopCamera]);
+
+  // Cropping functions
+  const getDefaultCropSize = (type: 'nid' | 'face' | 'qr') => {
+    switch (type) {
+      case 'nid':
+        return { width: 300, height: 200 }; // NID card aspect ratio
+      case 'face':
+        return { width: 200, height: 280 }; // Face portrait aspect ratio
+      case 'qr':
+        return { width: 200, height: 200 }; // Square for QR code
+      default:
+        return { width: 200, height: 200 };
+    }
+  };
+
+  const initializeCrop = useCallback(() => {
+    if (cropType && cropImage) {
+      const img = new Image();
+      img.onload = () => {
+        const container = cropContainerRef.current;
+        if (container) {
+          // Wait for the image to be rendered in the container
+          setTimeout(() => {
+            const imgElement = container.querySelector('img') as HTMLImageElement;
+            if (imgElement) {
+              const containerRect = container.getBoundingClientRect();
+              const imgRect = imgElement.getBoundingClientRect();
+              const defaultSize = getDefaultCropSize(cropType);
+              
+              // Calculate the actual image position within the container
+              const imgLeft = imgRect.left - containerRect.left;
+              const imgTop = imgRect.top - containerRect.top;
+              
+              // Center the crop area over the image
+              const x = imgLeft + (imgRect.width - defaultSize.width) / 2;
+              const y = imgTop + (imgRect.height - defaultSize.height) / 2;
+              
+              setCropData({
+                x: Math.max(0, x),
+                y: Math.max(0, y),
+                width: Math.min(defaultSize.width, imgRect.width),
+                height: Math.min(defaultSize.height, imgRect.height)
+              });
+            }
+          }, 100);
+        }
+      };
+      img.src = cropImage;
+    }
+  }, [cropType, cropImage]);
+
+  const handleMouseDown = (e: React.MouseEvent) => {
+    const rect = cropContainerRef.current?.getBoundingClientRect();
+    if (rect) {
+      const x = e.clientX - rect.left;
+      const y = e.clientY - rect.top;
+      
+      // Check if click is inside crop area
+      if (x >= cropData.x && x <= cropData.x + cropData.width &&
+          y >= cropData.y && y <= cropData.y + cropData.height) {
+        setIsDragging(true);
+        setDragStart({ x: x - cropData.x, y: y - cropData.y });
+      }
+    }
+  };
+
+  const handleMouseMove = (e: React.MouseEvent) => {
+    if (isDragging && cropContainerRef.current) {
+      const rect = cropContainerRef.current.getBoundingClientRect();
+      const x = e.clientX - rect.left - dragStart.x;
+      const y = e.clientY - rect.top - dragStart.y;
+      
+      // Constrain to container bounds
+      const maxX = rect.width - cropData.width;
+      const maxY = rect.height - cropData.height;
+      
+      setCropData(prev => ({
+        ...prev,
+        x: Math.max(0, Math.min(x, maxX)),
+        y: Math.max(0, Math.min(y, maxY))
+      }));
+    }
+  };
+
+  const handleMouseUp = () => {
+    setIsDragging(false);
+  };
+
+  const applyCrop = () => {
+    if (cropCanvasRef.current && cropImage && cropType) {
+      const canvas = cropCanvasRef.current;
+      const ctx = canvas.getContext('2d');
+      
+      if (ctx) {
+        const img = new Image();
+        img.onload = () => {
+          const container = cropContainerRef.current;
+          if (!container) return;
+          
+          const containerRect = container.getBoundingClientRect();
+          const imgElement = container.querySelector('img') as HTMLImageElement;
+          
+          if (!imgElement) return;
+          
+          // Calculate the actual image dimensions and position within the container
+          const imgRect = imgElement.getBoundingClientRect();
+          const scaleX = img.naturalWidth / imgRect.width;
+          const scaleY = img.naturalHeight / imgRect.height;
+          
+          // Convert crop coordinates from container space to image space
+          const cropX = (cropData.x - (imgRect.left - containerRect.left)) * scaleX;
+          const cropY = (cropData.y - (imgRect.top - containerRect.top)) * scaleY;
+          const cropWidth = cropData.width * scaleX;
+          const cropHeight = cropData.height * scaleY;
+          
+          // Ensure crop coordinates are within image bounds
+          const finalCropX = Math.max(0, Math.min(cropX, img.naturalWidth - cropWidth));
+          const finalCropY = Math.max(0, Math.min(cropY, img.naturalHeight - cropHeight));
+          const finalCropWidth = Math.min(cropWidth, img.naturalWidth - finalCropX);
+          const finalCropHeight = Math.min(cropHeight, img.naturalHeight - finalCropY);
+          
+          // Set canvas size to crop dimensions
+          canvas.width = finalCropWidth;
+          canvas.height = finalCropHeight;
+          
+          // Draw the cropped portion
+          ctx.drawImage(
+            img,
+            finalCropX, finalCropY, finalCropWidth, finalCropHeight,
+            0, 0, finalCropWidth, finalCropHeight
+          );
+          
+          // Convert to blob and save
+          canvas.toBlob((blob) => {
+            if (blob) {
+              const file = new File([blob], `${cropType}-capture.jpg`, { type: 'image/jpeg' });
+              const imageData = canvas.toDataURL('image/jpeg', 0.8);
+              
+              setCapturedImages(prev => ({
+                ...prev,
+                [cropType]: imageData
+              }));
+              
+              setFormData(prev => ({
+                ...prev,
+                [`${cropType}Photo`]: file
+              }));
+              
+              // Close cropping modal
+              setIsCropping(false);
+              setCropImage('');
+              setCropType(null);
+            }
+          }, 'image/jpeg', 0.8);
+        };
+        img.src = cropImage;
+      }
+    }
+  };
+
+  const cancelCrop = () => {
+    setIsCropping(false);
+    setCropImage('');
+    setCropType(null);
+  };
+
+  // Initialize crop when modal opens
+  useEffect(() => {
+    if (isCropping) {
+      initializeCrop();
+    }
+  }, [isCropping, initializeCrop]);
 
   // Cleanup on unmount
   useEffect(() => {
@@ -259,18 +440,13 @@ const AuthPage: React.FC = () => {
       const reader = new FileReader();
       reader.onload = (e) => {
         if (e.target?.result) {
-          setCapturedImages(prev => ({
-            ...prev,
-            [type]: e.target!.result as string
-          }));
+          // Show cropping modal for uploaded files too
+          setCropImage(e.target!.result as string);
+          setCropType(type);
+          setIsCropping(true);
         }
       };
       reader.readAsDataURL(file);
-      
-      setFormData(prev => ({
-        ...prev,
-        [`${type}Photo`]: file
-      }));
     }
   };
 
@@ -294,12 +470,75 @@ const AuthPage: React.FC = () => {
 
   const handleSubmit = async () => {
     setIsLoading(true);
+    setSuccessMessage('');
+    setErrorMessage('');
     
-    // Simulate API call
-    await new Promise(resolve => setTimeout(resolve, 1500));
-    
-    console.log(isLogin ? 'Login submitted:' : 'Register submitted:', formData);
-    setIsLoading(false);
+    try {
+      if (isLogin) {
+        // Login: Send QR code and face images to login endpoint
+        const formDataToSend = new FormData();
+        
+        if (formData.qrCode) {
+          formDataToSend.append('qrCode', formData.qrCode);
+        }
+        if (formData.facePhoto) {
+          formDataToSend.append('facePhoto', formData.facePhoto);
+        }
+        
+        const response = await axios.post('http://localhost:3000/v1/login', formDataToSend, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        
+        console.log('Login response:', response.data);
+        setSuccessMessage('Login successful! Welcome back.');
+        // Handle successful login here (e.g., redirect, show success message)
+        
+      } else {
+        // Registration: Send NID and face images to register endpoint
+        const formDataToSend = new FormData();
+        
+        if (formData.nidPhoto) {
+          formDataToSend.append('nidPhoto', formData.nidPhoto);
+        }
+        if (formData.facePhoto) {
+          formDataToSend.append('facePhoto', formData.facePhoto);
+        }
+        
+        const response = await axios.post('http://localhost:3000/api/v1/register', formDataToSend, {
+          headers: {
+            'Content-Type': 'multipart/form-data',
+          },
+        });
+        
+        console.log('Registration response:', response.data);
+        setSuccessMessage('Registration successful! You can now login with your QR code.');
+        // Handle successful registration here (e.g., show success message, switch to login)
+      }
+      
+    } catch (error) {
+      console.error('API Error:', error);
+      // Handle error here (e.g., show error message to user)
+      if (axios.isAxiosError(error)) {
+        console.error('Response data:', error.response?.data);
+        console.error('Status:', error.response?.status);
+        
+        if (error.response?.status === 400) {
+          setErrorMessage('Invalid data provided. Please check your images and try again.');
+        } else if (error.response?.status === 401) {
+          setErrorMessage('Authentication failed. Please check your credentials.');
+        } else if (error.response?.status === 500) {
+          setErrorMessage('Server error. Please try again later.');
+        } else {
+          setErrorMessage('An error occurred. Please try again.');
+        }
+      } else {
+        setErrorMessage('Network error. Please check your connection and try again.');
+      }
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   const handleBackToHome = () => {
@@ -317,14 +556,16 @@ const AuthPage: React.FC = () => {
         <div className="absolute bottom-1/4 left-1/2 w-32 h-32 sm:w-48 sm:h-48 lg:w-96 lg:h-96 bg-violet-400 rounded-full mix-blend-multiply filter blur-xl animate-pulse delay-2000"></div>
       </div>
 
-      {/* Back to Home Button */}
-      <button
-        onClick={handleBackToHome}
-        className="absolute top-3 left-3 sm:top-4 sm:left-4 lg:top-6 lg:left-6 z-20 flex items-center space-x-1 sm:space-x-2 text-gray-600 hover:text-gray-900 transition-colors group bg-white/80 backdrop-blur-sm rounded-full px-2 py-1 sm:px-3 sm:py-2 shadow-sm"
-      >
-        <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5 group-hover:-translate-x-1 transition-transform" />
-        <span className="font-medium text-sm sm:text-base">Back</span>
-      </button>
+      {/* Navigation */}
+      <div className="absolute top-3 left-3 sm:top-4 sm:left-4 lg:top-6 lg:left-6 z-20 flex items-center space-x-3">
+        <button
+          onClick={handleBackToHome}
+          className="flex items-center space-x-1 sm:space-x-2 text-gray-600 hover:text-gray-900 transition-colors group bg-white/80 backdrop-blur-sm rounded-full px-2 py-1 sm:px-3 sm:py-2 shadow-sm"
+        >
+          <ArrowLeft className="w-4 h-4 sm:w-5 sm:h-5 group-hover:-translate-x-1 transition-transform" />
+          <span className="font-medium text-sm sm:text-base">Back</span>
+        </button>
+      </div>
 
       {/* Camera Modal */}
       {activeCamera && (
@@ -361,7 +602,10 @@ const AuthPage: React.FC = () => {
                 playsInline
                 muted
                 controls={false}
-                style={{ backgroundColor: 'black' }}
+                style={{ 
+                  backgroundColor: 'black',
+                  transform: activeCamera === 'face' ? 'scaleX(-1)' : 'none'
+                }}
               />
               
               {/* Loading indicator */}
@@ -377,14 +621,21 @@ const AuthPage: React.FC = () => {
               {/* Overlay for QR code scanning */}
               {activeCamera === 'qr' && !cameraError && isVideoReady && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-48 h-48 border-2 border-white border-dashed rounded-lg"></div>
+                  <div className="w-48 h-32 border-2 border-white border-dashed rounded-lg"></div>
                 </div>
               )}
               
               {/* Overlay for face scanning */}
               {activeCamera === 'face' && !cameraError && isVideoReady && (
                 <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-32 h-40 border-2 border-white border-dashed rounded-full"></div>
+                  <div className="w-40 h-56 border-2 border-white border-dashed rounded-full"></div>
+                </div>
+              )}
+              
+              {/* Overlay for NID card scanning */}
+              {activeCamera === 'nid' && !cameraError && isVideoReady && (
+                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
+                  <div className="w-48 h-32 border-2 border-white border-dashed rounded-lg"></div>
                 </div>
               )}
             </div>
@@ -409,6 +660,119 @@ const AuthPage: React.FC = () => {
         </div>
       )}
 
+      {/* Cropping Modal */}
+      {isCropping && (
+        <div className="fixed inset-0 bg-black bg-opacity-90 z-50 flex items-center justify-center p-4">
+          <div className="bg-white rounded-xl p-4 w-full max-w-2xl">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-semibold">
+                {cropType === 'nid' && 'Crop NID Photo'}
+                {cropType === 'face' && 'Crop Face Photo'}
+                {cropType === 'qr' && 'Crop QR Code'}
+              </h3>
+              <button
+                onClick={cancelCrop}
+                className="p-2 hover:bg-gray-100 rounded-full transition-colors"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            
+            <div className="mb-4">
+              <p className="text-sm text-gray-600 mb-2">
+                {cropType === 'nid' && 'Drag the crop area to frame your National ID card. Ensure all text is clearly visible.'}
+                {cropType === 'face' && 'Drag the crop area to frame your face. Position your face within the oval guide.'}
+                {cropType === 'qr' && 'Drag the crop area to frame the QR code. Ensure the entire code is within the square.'}
+              </p>
+            </div>
+            
+            <div 
+              ref={cropContainerRef}
+              className="relative bg-gray-100 rounded-lg overflow-hidden mb-4 mx-auto border-2 border-gray-300"
+              style={{ width: '100%', maxWidth: '500px', height: '400px' }}
+              onMouseDown={handleMouseDown}
+              onMouseMove={handleMouseMove}
+              onMouseUp={handleMouseUp}
+              onMouseLeave={handleMouseUp}
+            >
+              {cropImage && (
+                <img 
+                  src={cropImage} 
+                  alt="Crop preview" 
+                  className="w-full h-full object-contain"
+                  style={{ 
+                    transform: cropType === 'face' ? 'scaleX(-1)' : 'none'
+                  }}
+                />
+              )}
+              
+              {/* Crop overlay */}
+              <div
+                className="absolute border-2 border-blue-500 bg-blue-500 bg-opacity-10 cursor-move shadow-lg"
+                style={{
+                  left: cropData.x,
+                  top: cropData.y,
+                  width: cropData.width,
+                  height: cropData.height,
+                  borderRadius: cropType === 'face' ? '50%' : '8px'
+                }}
+              >
+                {/* Grid lines */}
+                <div className="absolute inset-0">
+                  {/* Vertical lines */}
+                  <div className="absolute left-1/3 top-0 bottom-0 border-l border-white border-opacity-60"></div>
+                  <div className="absolute left-2/3 top-0 bottom-0 border-l border-white border-opacity-60"></div>
+                  {/* Horizontal lines */}
+                  <div className="absolute top-1/3 left-0 right-0 border-t border-white border-opacity-60"></div>
+                  <div className="absolute top-2/3 left-0 right-0 border-t border-white border-opacity-60"></div>
+                </div>
+                
+                {/* Corner handles for rectangular crops */}
+                {cropType !== 'face' && (
+                  <>
+                    <div className="absolute -top-1 -left-1 w-3 h-3 bg-blue-500 rounded-full shadow-md"></div>
+                    <div className="absolute -top-1 -right-1 w-3 h-3 bg-blue-500 rounded-full shadow-md"></div>
+                    <div className="absolute -bottom-1 -left-1 w-3 h-3 bg-blue-500 rounded-full shadow-md"></div>
+                    <div className="absolute -bottom-1 -right-1 w-3 h-3 bg-blue-500 rounded-full shadow-md"></div>
+                  </>
+                )}
+                
+                {/* Center indicator for face crop */}
+                {cropType === 'face' && (
+                  <div className="absolute inset-0 flex items-center justify-center">
+                    <div className="w-2 h-2 bg-white rounded-full opacity-80"></div>
+                  </div>
+                )}
+              </div>
+              
+              {/* Instructions overlay */}
+              <div className="absolute top-2 left-2 bg-black bg-opacity-70 text-white text-xs px-2 py-1 rounded">
+                Drag to move • Grid shows crop area
+              </div>
+            </div>
+            
+            {/* Hidden canvas for cropping */}
+            <canvas ref={cropCanvasRef} className="hidden" />
+            
+            <div className="flex justify-center space-x-4">
+              <button
+                onClick={cancelCrop}
+                className="px-4 py-2 bg-gray-500 text-white rounded-lg hover:bg-gray-600 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={applyCrop}
+                className="px-6 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors flex items-center space-x-2"
+              >
+                <Crop className="w-4 h-4" />
+                <span>Apply Crop</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Content */}
       <div className="relative z-10 w-full max-w-sm sm:max-w-md lg:max-w-lg xl:max-w-xl mx-auto">
         {/* Logo */}
@@ -426,7 +790,11 @@ const AuthPage: React.FC = () => {
           {/* Toggle Buttons */}
           <div className="flex bg-gray-100 rounded-lg p-1 mb-6 sm:mb-8">
             <button
-              onClick={() => setIsLogin(true)}
+              onClick={() => {
+                setIsLogin(true);
+                setSuccessMessage('');
+                setErrorMessage('');
+              }}
               className={`flex-1 py-2 px-2 sm:px-4 rounded-md font-medium text-sm sm:text-base transition-all duration-300 ${
                 isLogin
                   ? 'bg-white text-gray-900 shadow-sm'
@@ -436,7 +804,11 @@ const AuthPage: React.FC = () => {
               Login
             </button>
             <button
-              onClick={() => setIsLogin(false)}
+              onClick={() => {
+                setIsLogin(false);
+                setSuccessMessage('');
+                setErrorMessage('');
+              }}
               className={`flex-1 py-2 px-2 sm:px-4 rounded-md font-medium text-sm sm:text-base transition-all duration-300 ${
                 !isLogin
                   ? 'bg-white text-gray-900 shadow-sm'
@@ -552,6 +924,7 @@ const AuthPage: React.FC = () => {
             ) : (
               // Registration Fields
               <>
+                
                 {/* NID Photo Field */}
                 <div className="space-y-3">
                   <label className="text-sm font-medium text-gray-700">National ID Photo</label>
@@ -636,7 +1009,33 @@ const AuthPage: React.FC = () => {
                     )}
                   </div>
                 </div>
+                {/* Wallet Connection Field */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium text-gray-700">Connect Wallet</label>
+                  <WalletConnect />
+                </div>
+
               </>
+            )}
+
+            {/* Success Message */}
+            {successMessage && (
+              <div className="p-3 bg-green-50 border border-green-200 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <CheckCircle className="w-5 h-5 text-green-500 flex-shrink-0" />
+                  <p className="text-sm text-green-700">{successMessage}</p>
+                </div>
+              </div>
+            )}
+
+            {/* Error Message */}
+            {errorMessage && (
+              <div className="p-3 bg-red-50 border border-red-200 rounded-lg">
+                <div className="flex items-center space-x-2">
+                  <AlertCircle className="w-5 h-5 text-red-500 flex-shrink-0" />
+                  <p className="text-sm text-red-700">{errorMessage}</p>
+                </div>
+              </div>
             )}
 
             {/* Submit Button */}
@@ -649,7 +1048,7 @@ const AuthPage: React.FC = () => {
             >
               {isLoading ? (
                 <div className="flex items-center justify-center space-x-2">
-                  <div className="w-4 h-4 sm:w-5 sm:h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
+                  <div className="w-4 h-4 mt-4 sm:w-5 sm:h-5 border-2 border-white border-t-transparent rounded-full animate-spin"></div>
                   <span>{isLogin ? 'Verifying...' : 'Registering...'}</span>
                 </div>
               ) : (

@@ -23,17 +23,17 @@ const upload = multer({ storage });
 
 // Registration endpoint
 app.post('/api/v1/register', upload.fields([
-  { name: 'nidImage', maxCount: 1 },
-  { name: 'faceImage', maxCount: 1 },
+  { name: 'nidPhoto', maxCount: 1 },
+  { name: 'facePhoto', maxCount: 1 },
 ]), (req, res) => {
   console.log('Files:', req.files);
   res.status(200).json({ message: 'Files uploaded successfully' });
 });
 
 //Login Endpoint
-app.post('/api/v1/login', upload.fields([
-  { name: 'nidImage', maxCount: 1 },
-  { name: 'faceImage', maxCount: 1 },
+app.post('/v1/login', upload.fields([
+  { name: 'qrCode', maxCount: 1 },
+  { name: 'facePhoto', maxCount: 1 },
 ]), (req, res) => {
   console.log('Files:', req.files);
   res.status(200).json({ message: 'Files uploaded successfully' });

@@ -12,7 +12,6 @@ export default defineConfig({
       'localhost',
       '127.0.0.1',
       '.ngrok-free.app', // Allow all ngrok domains
-      'dff2-118-179-48-72.ngrok-free.app' // Your specific ngrok domain
     ]
   }
 })

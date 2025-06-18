@@ -82,12 +82,14 @@ const HomePage: React.FC = () => {
           </span>
         </div>
         
-        <button
-          onClick={handleLogin}
-          className="bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white px-4 py-2 sm:px-6 sm:py-2 rounded-full font-semibold text-sm sm:text-base transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
-        >
-          Login
-        </button>
+        <div className="flex items-center space-x-3">
+          <button
+            onClick={handleLogin}
+            className="bg-gradient-to-r from-blue-600 to-emerald-600 hover:from-blue-700 hover:to-emerald-700 text-white px-4 py-2 sm:px-6 sm:py-2 rounded-full font-semibold text-sm sm:text-base transition-all duration-300 transform hover:scale-105 shadow-lg hover:shadow-blue-500/25"
+          >
+            Login
+          </button>
+        </div>
       </nav>
 
       {/* Hero Section - Mobile Optimized */}
@@ -161,7 +163,21 @@ const HomePage: React.FC = () => {
             ))}
           </div>
         </div>
-      </section>    
+      </section>
+
+      {/* Smart Contract Demo Section */}
+      <section className="relative z-10 py-12 sm:py-16 lg:py-20 px-4 sm:px-6 lg:px-12 w-full max-w-[100vw] bg-white/30 backdrop-blur-sm">
+        <div className="w-full max-w-[100vw] mx-auto">
+          <div className="text-center mb-12 sm:mb-16">
+            <h2 className="text-2xl sm:text-3xl md:text-4xl lg:text-5xl font-bold mb-4 sm:mb-6 text-gray-900 px-2">
+              <span className="bg-gradient-to-r from-blue-600 to-emerald-600 bg-clip-text text-transparent">Web3</span> Integration
+            </h2>
+            <p className="text-base sm:text-lg md:text-xl text-gray-600 max-w-4xl mx-auto px-4">
+              Experience seamless blockchain integration with MetaMask and other Web3 wallets.
+            </p>
+          </div>
+        </div>
+      </section>
 
       {/* Footer - Mobile Optimized */}
       <footer className="relative z-10 py-8 sm:py-12 px-4 sm:px-6 lg:px-12 border-t border-gray-200 w-full max-w-[100vw]">
