@@ -1,10 +1,11 @@
 import React, { useState, useRef, useCallback, useEffect } from 'react';
-import { Eye, EyeOff, Fingerprint, ArrowLeft, Camera, Upload, QrCode, Scan, CheckCircle, AlertCircle, RotateCcw, X, Crop } from 'lucide-react';
+import { Eye, EyeOff, Fingerprint, ArrowLeft, Camera, Upload, QrCode, Scan, CheckCircle, AlertCircle, RotateCcw, X, Crop,Lock,CreditCard } from 'lucide-react';
 import axios from 'axios';
 import WalletConnect from './WalletConnect';
 
 interface FormData {
-  nidPhoto?: File;
+  nidNumber?: string;
+  password?: string;
   facePhoto?: File;
   qrCode?: File;
 }
@@ -26,6 +27,7 @@ const AuthPage: React.FC = () => {
   const [isVideoReady, setIsVideoReady] = useState(false);
   const [successMessage, setSuccessMessage] = useState<string>('');
   const [errorMessage, setErrorMessage] = useState<string>('');
+  const [showPassword, setShowPassword] = useState(false);
   
   // Cropping state
   const [isCropping, setIsCropping] = useState(false);
@@ -457,15 +459,26 @@ const AuthPage: React.FC = () => {
       return updated;
     });
     
-    setFormData(prev => {
-      const updated = { ...prev };
-      if (type === 'qr') {
-        delete updated.qrCode;
-      } else {
-        delete updated[`${type}Photo`];
-      }
-      return updated;
-    });
+   setFormData(prev => {
+  const updated = { ...prev };
+  if (type === 'qr') {
+    delete updated.qrCode;
+  } else if (type === 'face') {
+    delete updated.facePhoto;
+  } else if (type === 'nid') {
+    // No nidPhoto field, so nothing to delete here
+    // Maybe you want to clear nidNumber instead?
+    delete updated.nidNumber;
+  }
+  return updated;
+});
+  };
+
+   const handleInputChange = (field: string, value: string) => {
+    setFormData(prev => ({
+      ...prev,
+      [field]: value
+    }));
   };
 
   const handleSubmit = async () => {
@@ -484,6 +497,9 @@ const AuthPage: React.FC = () => {
         if (formData.facePhoto) {
           formDataToSend.append('facePhoto', formData.facePhoto);
         }
+        if (formData.password) {
+          formDataToSend.append('password', formData.password);
+        }
         
         const response = await axios.post('http://localhost:3000/v1/login', formDataToSend, {
           headers: {
@@ -499,8 +515,11 @@ const AuthPage: React.FC = () => {
         // Registration: Send NID and face images to register endpoint
         const formDataToSend = new FormData();
         
-        if (formData.nidPhoto) {
-          formDataToSend.append('nidPhoto', formData.nidPhoto);
+        if (formData.nidNumber) {
+          formDataToSend.append('nidNumber', formData.nidNumber);
+        }
+        if (formData.password) {
+          formDataToSend.append('password', formData.password);
         }
         if (formData.facePhoto) {
           formDataToSend.append('facePhoto', formData.facePhoto);
@@ -632,12 +651,7 @@ const AuthPage: React.FC = () => {
                 </div>
               )}
               
-              {/* Overlay for NID card scanning */}
-              {activeCamera === 'nid' && !cameraError && isVideoReady && (
-                <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-                  <div className="w-48 h-32 border-2 border-white border-dashed rounded-lg"></div>
-                </div>
-              )}
+              
             </div>
             
             <div className="flex justify-center space-x-4">
@@ -887,6 +901,30 @@ const AuthPage: React.FC = () => {
                   </div>
                 </div>
 
+                {/* Password Field */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium text-gray-700">Password</label>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={formData.password || ''}
+                      onChange={(e) => handleInputChange('password', e.target.value)}
+                      className="w-full pl-10 pr-12 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                      placeholder="Enter your password"
+                      required
+                    />
+                    <Lock className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                </div>
+
+
                 {/* Face Scan Field */}
                 <div className="space-y-3">
                   <label className="text-sm font-medium text-gray-700">Face Verification</label>
@@ -925,56 +963,49 @@ const AuthPage: React.FC = () => {
               // Registration Fields
               <>
                 
-                {/* NID Photo Field */}
+                {/* NID Number Field */}
                 <div className="space-y-3">
-                  <label className="text-sm font-medium text-gray-700">National ID Photo</label>
-                  <div className="border-2 border-dashed border-gray-300 rounded-lg p-6 bg-gray-50">
-                    {capturedImages.nid ? (
-                      <div className="relative">
-                        <img src={capturedImages.nid} alt="NID" className="w-full h-32 object-cover rounded-lg" />
-                        <button
-                          onClick={() => retakePhoto('nid')}
-                          className="absolute top-2 right-2 p-1 bg-red-500 text-white rounded-full hover:bg-red-600 transition-colors"
-                        >
-                          <RotateCcw className="w-4 h-4" />
-                        </button>
-                        <div className="mt-2 flex items-center text-sm text-green-600">
-                          <CheckCircle className="w-4 h-4 mr-1" />
-                          NID photo captured
-                        </div>
-                      </div>
-                    ) : (
-                      <div className="text-center">
-                        <Camera className="w-12 h-12 text-gray-400 mx-auto mb-3" />
-                        <div className="space-y-2">
-                          <button
-                            onClick={() => startCamera('nid')}
-                            className="w-full bg-blue-600 text-white py-2 px-4 rounded-lg hover:bg-blue-700 transition-colors flex items-center justify-center space-x-2"
-                          >
-                            <Camera className="w-4 h-4" />
-                            <span>Capture NID</span>
-                          </button>
-                          <div className="text-sm text-gray-500">or</div>
-                          <button
-                            onClick={() => fileInputRef.current?.click()}
-                            className="w-full bg-gray-600 text-white py-2 px-4 rounded-lg hover:bg-gray-700 transition-colors flex items-center justify-center space-x-2"
-                          >
-                            <Upload className="w-4 h-4" />
-                            <span>Upload NID Photo</span>
-                          </button>
-                          <input
-                            ref={fileInputRef}
-                            type="file"
-                            accept="image/*"
-                            onChange={(e) => handleFileUpload(e, 'nid')}
-                            className="hidden"
-                          />
-                        </div>
-                        <p className="text-xs text-gray-500 mt-2">Make sure your ID is clearly visible</p>
-                      </div>
-                    )}
+                  <label className="text-sm font-medium text-gray-700">National ID Number</label>
+                  <div className="relative">
+                    <input
+                      type="text"
+                      value={formData.nidNumber || ''}
+                      onChange={(e) => handleInputChange('nidNumber', e.target.value)}
+                      className="w-full pl-10 pr-4 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                      placeholder="Enter your NID number"
+                      required
+                    />
+                    <CreditCard className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
                   </div>
+                  <p className="text-xs text-gray-500">Enter your 10 or 17 digit National ID number</p>
                 </div>
+
+
+
+{/* Password Field */}
+                <div className="space-y-3">
+                  <label className="text-sm font-medium text-gray-700">Create Password</label>
+                  <div className="relative">
+                    <input
+                      type={showPassword ? 'text' : 'password'}
+                      value={formData.password || ''}
+                      onChange={(e) => handleInputChange('password', e.target.value)}
+                      className="w-full pl-10 pr-12 py-3 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-transparent bg-white"
+                      placeholder="Create a strong password"
+                      required
+                    />
+                    <Lock className="w-5 h-5 text-gray-400 absolute left-3 top-1/2 transform -translate-y-1/2" />
+                    <button
+                      type="button"
+                      onClick={() => setShowPassword(!showPassword)}
+                      className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      {showPassword ? <EyeOff className="w-5 h-5" /> : <Eye className="w-5 h-5" />}
+                    </button>
+                  </div>
+                  <p className="text-xs text-gray-500">Password should be at least 8 characters long</p>
+                </div>
+
 
                 {/* Face Scan Field */}
                 <div className="space-y-3">
