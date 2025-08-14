@@ -8,6 +8,9 @@ const app = express();
 const port = 3000;
 const crypto = require('crypto');
 const QRCode = require('qrcode');
+const fs = require('fs');
+const { Jimp } = require('jimp');
+const jsQR = require('jsqr');
 
 app.use(cors());
 app.use(express.json());
@@ -92,7 +95,7 @@ const provider = new ethers.JsonRpcProvider(RPC_URL);
 const wallet = new ethers.Wallet(PRIVATE_KEY, provider);
 const contract = new ethers.Contract(CONTRACT_ADDRESS, CONTRACT_ABI, wallet);
 
-const upload = multer({ storage });
+const upload = multer({ storage: multer.memoryStorage() });
 
 function hashNidNumber(nidNumber) {
   return ethers.keccak256(ethers.toUtf8Bytes(nidNumber.trim()));
@@ -139,7 +142,8 @@ app.post('/api/v1/register', async (req, res) => {
 
     // 6) Send QR as downloadable PNG
     res.setHeader('Content-Type', 'image/png');
-    res.setHeader('Content-Disposition', 'attachment; filename=qr.png');
+    let random = crypto.randomBytes(10).toString('hex');
+    res.setHeader('Content-Disposition', `attachment; filename=${random}qr.png`);
     res.send(qrBuffer);
 
   } catch (err) {
@@ -172,50 +176,45 @@ function decryptQR(encryptedPayload, password) {
 
 
 //Login
-const fs = require('fs');
-const Jimp = require('jimp');
-const QrCode = require('qrcode-reader');
 
-app.post('/v1/login', upload.single('qrCode'), async (req, res) => {
+app.post('/api/v1/login', upload.single('qrCode'), async (req, res) => {
+  const qrFile = req.file;
+
   try {
-    const password = req.body.password;
-    if (!password) return res.status(400).json({ ok: false, error: 'Password is required' });
-
-    const qrFile = req.file;
     if (!qrFile) return res.status(400).json({ ok: false, error: 'QR code is required' });
 
-    // 1) Read QR code from uploaded buffer
-    const qrImage = await Jimp.read(qrFile.buffer);
-    const qr = new QrCode();
-    const encryptedPayload = await new Promise((resolve, reject) => {
-      qr.callback = (err, value) => {
-        if (err) reject(err);
-        else resolve(value.result); // this is the encrypted JSON payload
-      };
-      qr.decode(qrImage.bitmap);
-    });
+    // 1) Load image
+    const image = await Jimp.read(qrFile.buffer || qrFile.path); // buffer for memoryStorage, path for diskStorage
+    const { data, width, height } = image.bitmap;
 
-    // 2) Decrypt payload
-    const { iv, data } = JSON.parse(encryptedPayload);
-    const key = crypto.createHash('sha256').update(password).digest();
+    // 2) Decode QR
+    const code = jsQR(new Uint8ClampedArray(data), width, height);
+    if (!code) return res.status(400).json({ ok: false, error: 'Unable to decode QR code' });
+
+    const encryptedPayload = code.data;
+
+    // 3) Decrypt
+    const { iv, data: encryptedData } = JSON.parse(encryptedPayload);
+    const key = crypto.createHash('sha256').update(req.body.password).digest();
     const ivBuffer = Buffer.from(iv, 'base64');
-
     const decipher = crypto.createDecipheriv('aes-256-cbc', key, ivBuffer);
-    let decrypted = decipher.update(data, 'base64', 'utf8');
+    let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
     decrypted += decipher.final('utf8');
+    const qrData = JSON.parse(decrypted);
 
-    const qrData = JSON.parse(decrypted); // { txHash, nidHash, faceHash }
-
-    // 3) Return decrypted data
-    res.json({
-      ok: true,
-      message: 'QR decrypted successfully',
-      qrData
-    });
+    res.json({ ok: true, message: 'QR decrypted successfully', qrData });
 
   } catch (err) {
     console.error(err);
     res.status(500).json({ ok: false, error: err.message || 'Unknown error' });
+  } finally {
+    // Delete file from disk if using diskStorage
+    if (qrFile && qrFile.path) {
+      fs.unlink(qrFile.path, (err) => {
+        if (err) console.error('Error deleting file:', err);
+        else console.log('Uploaded QR file deleted.');
+      });
+    }
   }
 });
 
