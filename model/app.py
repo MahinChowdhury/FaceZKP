@@ -4,7 +4,7 @@ import cv2
 import numpy as np
 import tensorflow as tf
 from mtcnn.mtcnn import MTCNN
-from fastapi import FastAPI, File, UploadFile, HTTPException
+from fastapi import FastAPI, File, UploadFile, HTTPException , Body
 from fastapi.responses import JSONResponse
 import uvicorn
 
@@ -72,6 +72,17 @@ def compress_embedding(embedding, base=1.00049, bias=50):
     log_base = np.log(biased) / np.log(base)
     return np.floor(log_base)
 
+def calculate_similarity(emb1, emb2, model_name="Facenet", threshold=30):
+    """Compute Euclidean distance and match status between two embeddings."""
+    emb1 = np.array(emb1)
+    emb2 = np.array(emb2)
+    distance = np.linalg.norm(emb1 - emb2)
+    is_same = distance < threshold
+
+    print(f"Distance: {distance:.4f}")
+    print("Faces match!" if is_same else "Faces do not match.")
+    return distance, is_same
+
 
 # =========================
 # FastAPI App
@@ -83,7 +94,8 @@ BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # folder where app.py is
 TAR_PATH = os.path.join(BASE_DIR, "facenet-tensorflow-tensorflow2-default-v2.tar.gz")
 MODEL_DIR = os.path.join(BASE_DIR, "facenet-tensorflow")
 #if not os.path.exists(MODEL_DIR):
-#extract_model(TAR_PATH, MODEL_DIR)
+if not os.path.exists(MODEL_DIR):
+    extract_model(TAR_PATH, MODEL_DIR)
 infer_fn = load_facenet_model(MODEL_DIR)
 
 
@@ -99,6 +111,26 @@ async def get_embedding(file: UploadFile = File(...)):
                 "embedding_compressed": compressed.astype(int).tolist()
             }
         )
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=str(e))
+
+@app.post("/compare-embeddings")
+async def compare_embeddings(data: dict = Body(...)):
+
+    try:
+        emb1 = data["face_login"]
+        emb2 = data["face_reg"]
+        threshold = data.get("threshold", 30)
+
+        distance, is_same = calculate_similarity(emb1, emb2, threshold=threshold)
+        return JSONResponse(
+            content={
+                "distance": float(distance),
+                "match": bool(is_same)
+            }
+        )
+    except KeyError as e:
+        raise HTTPException(status_code=400, detail=f"Missing key: {e}")
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 

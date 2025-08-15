@@ -11,6 +11,9 @@ const QRCode = require('qrcode');
 const fs = require('fs');
 const { Jimp } = require('jimp');
 const jsQR = require('jsqr');
+const { keccak256, toUtf8Bytes } = require("ethers");
+const axios = require('axios');
+const FormData = require('form-data');
 
 app.use(cors());
 app.use(express.json());
@@ -103,54 +106,87 @@ function hashNidNumber(nidNumber) {
 
 
 // Registration endpoint
-app.post('/api/v1/register', async (req, res) => {
-  try {
-    const { nidNumber, faceHash, password } = req.body;
+app.post(
+  '/api/v1/register',
+  upload.single('faceImg'),
+  async (req, res) => {
+    try {
+      const { nidNumber, password } = req.body;
+      const faceFile = req.file;
 
-    if (!nidNumber) return res.status(400).json({ ok: false, error: "nidNumber is required" });
-    if (!faceHash) return res.status(400).json({ ok: false, error: "faceHash is required" });
-    if (!password) return res.status(400).json({ ok: false, error: "password is required" });
+      if (!nidNumber) return res.status(400).json({ ok: false, error: "nidNumber is required" });
+      if (!faceFile) return res.status(400).json({ ok: false, error: "faceImg is required" });
+      if (!password) return res.status(400).json({ ok: false, error: "password is required" });
 
-    // 1) Hash NID
-    const nidHash = hashNidNumber(nidNumber);
+      // 1) Hash NID
+      const nidHash = hashNidNumber(nidNumber);
 
-    // 2) Call contract
-    const tx = await contract.register(nidHash, faceHash);
-    const receipt = await tx.wait();
+      // 2) Call Python /get-embedding API
+      const FormData = require('form-data');
+      const form = new FormData();
+      form.append('file', faceFile.buffer, {
+        filename: faceFile.originalname,
+        contentType: faceFile.mimetype
+      });
 
-    // 3) Prepare QR code payload
-    const qrData = JSON.stringify({
-      txHash: receipt.hash,
-      nidHash,
-      faceHash
-    });
+      const response = await axios.post(
+        'http://localhost:8000/get-embedding', // Python API endpoint
+        form,
+        { headers: form.getHeaders() }
+      );
 
-    // 4) Encrypt QR data with password (AES-256-CBC)
-    const key = crypto.createHash('sha256').update(password).digest(); // 32-byte key
-    const iv = crypto.randomBytes(16);
-    const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
-    let encrypted = cipher.update(qrData, 'utf8', 'base64');
-    encrypted += cipher.final('base64');
+      const face_reg = response.data.embedding_compressed;
 
-    const encryptedPayload = JSON.stringify({
-      iv: iv.toString('base64'),
-      data: encrypted
-    });
+      // Convert to hash (string) to store in blockchain
+      const faceHash = keccak256(
+        toUtf8Bytes(JSON.stringify(face_reg))
+      );
 
-    // 5) Generate QR code as Buffer
-    const qrBuffer = await QRCode.toBuffer(encryptedPayload);
+      // 3) Call contract
+      const tx = await contract.register(nidHash, faceHash);
+      const receipt = await tx.wait();
 
-    // 6) Send QR as downloadable PNG
-    res.setHeader('Content-Type', 'image/png');
-    let random = crypto.randomBytes(10).toString('hex');
-    res.setHeader('Content-Disposition', `attachment; filename=${random}qr.png`);
-    res.send(qrBuffer);
+      // 4) Prepare QR code payload
+      const qrData = JSON.stringify({
+        txHash: receipt.hash,
+        nidHash,
+        faceHash,
+        face_reg
+      });
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err.message || "Unknown error" });
+      // 5) Encrypt QR data with password (AES-256-CBC)
+      const key = crypto.createHash('sha256').update(password).digest(); // 32-byte key
+      const iv = crypto.randomBytes(16);
+      const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
+      let encrypted = cipher.update(qrData, 'utf8', 'base64');
+      encrypted += cipher.final('base64');
+
+      const encryptedPayload = JSON.stringify({
+        iv: iv.toString('base64'),
+        data: encrypted
+      });
+
+      // 6) Generate QR code as Buffer
+      const qrBuffer = await QRCode.toBuffer(encryptedPayload);
+
+      // 7) Send QR as downloadable PNG
+      res.setHeader('Content-Type', 'image/png');
+      const random = crypto.randomBytes(10).toString('hex');
+      res.setHeader('Content-Disposition', `attachment; filename=${random}qr.png`);
+      res.send(qrBuffer);
+
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ ok: false, error: err.message || "Unknown error" });
+    } finally {
+      if (req.file && req.file.path) {
+        fs.unlink(req.file.path, (err) => {
+          if (err) console.error('Error deleting faceImg:', err);
+        });
+      }
+    }
   }
-});
+);
 
 
 function decryptQR(encryptedPayload, password) {
@@ -173,49 +209,79 @@ function decryptQR(encryptedPayload, password) {
   return qrData; // { txHash, nidHash, faceHash }
 }
 
-
-
 //Login
 
-app.post('/api/v1/login', upload.single('qrCode'), async (req, res) => {
-  const qrFile = req.file;
+app.post('/api/v1/login', 
+  upload.fields([
+    { name: 'qrCode', maxCount: 1 },
+    { name: 'faceImg', maxCount: 1 }
+  ]), 
+  async (req, res) => {
+    try {
+      const qrFile = req.files?.qrCode?.[0];
+      const faceFile = req.files?.faceImg?.[0];
 
-  try {
-    if (!qrFile) return res.status(400).json({ ok: false, error: 'QR code is required' });
+      if (!qrFile) return res.status(400).json({ ok: false, error: 'QR code is required' });
+      if (!faceFile) return res.status(400).json({ ok: false, error: 'Face image is required' });
 
-    // 1) Load image
-    const image = await Jimp.read(qrFile.buffer || qrFile.path); // buffer for memoryStorage, path for diskStorage
-    const { data, width, height } = image.bitmap;
+      // 1) Process QR code
+      const image = await Jimp.read(qrFile.buffer || qrFile.path);
+      const { data, width, height } = image.bitmap;
+      const code = jsQR(new Uint8ClampedArray(data), width, height);
+      if (!code) return res.status(400).json({ ok: false, error: 'Unable to decode QR code' });
 
-    // 2) Decode QR
-    const code = jsQR(new Uint8ClampedArray(data), width, height);
-    if (!code) return res.status(400).json({ ok: false, error: 'Unable to decode QR code' });
+      const encryptedPayload = code.data;
+      const { iv, data: encryptedData } = JSON.parse(encryptedPayload);
+      const key = crypto.createHash('sha256').update(req.body.password).digest();
+      const ivBuffer = Buffer.from(iv, 'base64');
+      const decipher = crypto.createDecipheriv('aes-256-cbc', key, ivBuffer);
+      let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+      decrypted += decipher.final('utf8');
+      const qrData = JSON.parse(decrypted);
 
-    const encryptedPayload = code.data;
+      // 2) Send faceImg to Python API
+      const formData = new FormData();
+      formData.append('file', faceFile.buffer, {
+        filename: faceFile.originalname, // must provide
+        contentType: faceFile.mimetype
+      });
 
-    // 3) Decrypt
-    const { iv, data: encryptedData } = JSON.parse(encryptedPayload);
-    const key = crypto.createHash('sha256').update(req.body.password).digest();
-    const ivBuffer = Buffer.from(iv, 'base64');
-    const decipher = crypto.createDecipheriv('aes-256-cbc', key, ivBuffer);
-    let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
-    decrypted += decipher.final('utf8');
-    const qrData = JSON.parse(decrypted);
+      const response1 = await axios.post(
+        'http://localhost:8000/get-embedding',
+        formData,
+        { headers: formData.getHeaders() } // VERY IMPORTANT
+      );
 
-    res.json({ ok: true, message: 'QR decrypted successfully', qrData });
+      const face_login = response1.data.embedding_compressed;
+      const face_reg = qrData.face_reg;
 
-  } catch (err) {
-    console.error(err);
-    res.status(500).json({ ok: false, error: err.message || 'Unknown error' });
-  } finally {
-    // Delete file from disk if using diskStorage
-    if (qrFile && qrFile.path) {
-      fs.unlink(qrFile.path, (err) => {
-        if (err) console.error('Error deleting file:', err);
-        else console.log('Uploaded QR file deleted.');
+      const response2 = await axios.post(
+        "http://localhost:8000/compare-embeddings",
+        {
+          face_login: face_login,
+          face_reg: face_reg,
+          threshold: 30  // optional
+        }
+      );
+
+      const IsMatch = response2.data.match;
+
+      res.json({
+        ok: true,
+        message: 'QR decrypted and face embedding retrieved',
+        qrData,
+        IsMatch
+      });
+
+    } catch (err) {
+      console.error(err);
+      res.status(500).json({ ok: false, error: err.message || 'Unknown error' });
+    } finally {
+      // Delete uploaded files if diskStorage
+      [req.files?.qrCode?.[0], req.files?.faceImg?.[0]].forEach(file => {
+        if (file && file.path) fs.unlink(file.path, () => {});
       });
     }
-  }
 });
 
 app.listen(port, () => {
