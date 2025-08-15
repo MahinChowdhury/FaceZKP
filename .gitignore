@@ -38,4 +38,4 @@ yarn-error.*
 
 app-example
 
-facenet-tensorflow
+model/facenet-tensorflow/
