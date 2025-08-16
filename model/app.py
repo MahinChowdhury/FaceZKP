@@ -1,67 +1,33 @@
 import os
-import tarfile
 import cv2
 import numpy as np
-import tensorflow as tf
-from mtcnn.mtcnn import MTCNN
-from fastapi import FastAPI, File, UploadFile, HTTPException , Body
+from fastapi import FastAPI, File, UploadFile, HTTPException, Body
 from fastapi.responses import JSONResponse
 import uvicorn
-
-# =========================
-# Model Extraction & Loading
-# =========================
-def extract_model(tar_path: str, extract_to: str):
-    """Extract a tar.gz model file to a target folder."""
-    if not os.path.exists(extract_to):
-        os.makedirs(extract_to)
-    with tarfile.open(tar_path, "r:gz") as tar:
-        tar.extractall(path=extract_to)
+from insightface.app import FaceAnalysis
+from sklearn.decomposition import PCA
+import joblib
 
 
-def load_facenet_model(model_dir: str):
-    """Load a TensorFlow SavedModel and return the inference function."""
-    model = tf.saved_model.load(model_dir)
-    return model.signatures['serving_default']
+#InsightFace
 
-
-# =========================
-# Face Detection & Preprocessing
-# =========================
-detector = MTCNN()
-
-def detect_and_crop_face(img_bytes: bytes):
-    """Detect and crop the face from the image using MTCNN."""
-    nparr = np.frombuffer(img_bytes, np.uint8)
-    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
-    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-
-    detections = detector.detect_faces(img_rgb)
-    if not detections:
-        raise ValueError("No face detected in image")
-
-    x, y, width, height = detections[0]['box']
-    return img_rgb[y:y + height, x:x + width]
-
-
-def preprocess_pipeline(img_bytes: bytes, target_size=(160, 160)):
-    """Detect, crop, resize, and normalize a face image for Facenet."""
-    face_img = detect_and_crop_face(img_bytes)
-    face_img = cv2.resize(face_img, target_size)
-    face_img = np.expand_dims(face_img, axis=0)
-    face_img = (face_img / 127.5) - 1.0  # Normalize to [-1, 1]
-    return tf.convert_to_tensor(face_img, dtype=tf.float32)
-
+app_insight = FaceAnalysis(name="buffalo_l")  # pre-trained ArcFace + SCRFD
+app_insight.prepare(ctx_id=0, det_size=(640, 640))  # ctx_id=-1 for CPU
 
 # =========================
 # Embedding & Compression
 # =========================
-def get_face_embedding(img_bytes: bytes, infer, target_size=(160, 160)):
-    """Generate a normalized face embedding from an image."""
-    img_tensor = preprocess_pipeline(img_bytes, target_size)
-    result = infer(img_tensor)
-    embedding = result['Bottleneck_BatchNorm'].numpy()
-    embedding = embedding[0] / np.linalg.norm(embedding)
+def get_face_embedding(img_bytes: bytes):
+    """Extract face embedding using InsightFace ArcFace model."""
+    nparr = np.frombuffer(img_bytes, np.uint8)
+    img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+
+    faces = app_insight.get(img)
+    if not faces:
+        raise ValueError("No face detected in image")
+
+    embedding = faces[0].embedding
+    embedding = embedding / np.linalg.norm(embedding)  # Normalize
     return embedding
 
 
@@ -72,15 +38,13 @@ def compress_embedding(embedding, base=1.00049, bias=50):
     log_base = np.log(biased) / np.log(base)
     return np.floor(log_base)
 
-def calculate_similarity(emb1, emb2, model_name="Facenet", threshold=30):
-    """Compute Euclidean distance and match status between two embeddings."""
+
+def calculate_similarity(emb1, emb2, threshold=1.0):
+    """Compute cosine similarity or Euclidean distance."""
     emb1 = np.array(emb1)
     emb2 = np.array(emb2)
     distance = np.linalg.norm(emb1 - emb2)
     is_same = distance < threshold
-
-    print(f"Distance: {distance:.4f}")
-    print("Faces match!" if is_same else "Faces do not match.")
     return distance, is_same
 
 
@@ -88,41 +52,40 @@ def calculate_similarity(emb1, emb2, model_name="Facenet", threshold=30):
 # FastAPI App
 # =========================
 app = FastAPI()
-
-# Load model once at startup
-BASE_DIR = os.path.dirname(os.path.abspath(__file__))  # folder where app.py is
-TAR_PATH = os.path.join(BASE_DIR, "facenet-tensorflow-tensorflow2-default-v2.tar.gz")
-MODEL_DIR = os.path.join(BASE_DIR, "facenet-tensorflow")
-#if not os.path.exists(MODEL_DIR):
-if not os.path.exists(MODEL_DIR):
-    extract_model(TAR_PATH, MODEL_DIR)
-infer_fn = load_facenet_model(MODEL_DIR)
-
+pca = joblib.load("pca_64.pkl")
 
 @app.post("/get-embedding")
-async def get_embedding(file: UploadFile = File(...)):
+async def get_embedding_api(file: UploadFile = File(...)):
     try:
         img_bytes = await file.read()
-        embedding = get_face_embedding(img_bytes, infer_fn)
+        embedding = get_face_embedding(img_bytes)
         compressed = compress_embedding(embedding)
+        reduced = pca.transform([compressed])[0]
+
+        print(reduced)
 
         return JSONResponse(
             content={
-                "embedding_compressed": compressed.astype(int).tolist()
+                "reduced_emb": reduced.tolist()
             }
         )
     except Exception as e:
         raise HTTPException(status_code=400, detail=str(e))
 
-@app.post("/compare-embeddings")
-async def compare_embeddings(data: dict = Body(...)):
 
+@app.post("/compare-embeddings")
+async def compare_embeddings_api(data: dict = Body(...)):
     try:
+        # Extract embeddings from payload
         emb1 = data["face_login"]
         emb2 = data["face_reg"]
-        threshold = data.get("threshold", 30)
 
-        distance, is_same = calculate_similarity(emb1, emb2, threshold=threshold)
+        # Use default threshold (no need to send from client)
+        default_threshold = 7.0
+        distance, is_same = calculate_similarity(emb1, emb2, threshold=default_threshold)
+
+        print("distandce : ",distance,is_same)
+
         return JSONResponse(
             content={
                 "distance": float(distance),
