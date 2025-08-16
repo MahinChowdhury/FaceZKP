@@ -226,7 +226,7 @@ async function getFaceEmbedding(file) {
     headers: form.getHeaders(),
   });
 
-  return response.data.embedding_compressed;
+  return response.data.reduced_emb;
 }
 
 // Compare embeddings via Python API
@@ -341,6 +341,7 @@ app.post("/api/v1/login", upload.fields([{ name: "qrCode" }, { name: "faceImg" }
     // 2. Get login face embedding
     const faceLogin = await getFaceEmbedding(faceFile);
 
+    console.log("qrDate : ",qrData);
     // 3. Compare embeddings
     const isMatch = await compareEmbeddings(faceLogin, qrData.face_reg);
 
