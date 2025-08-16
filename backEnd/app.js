@@ -8,11 +8,14 @@ const fs = require("fs");
 const path = require("path");
 const crypto = require("crypto");
 const QRCode = require("qrcode");
-const Jimp = require("jimp");
+const {Jimp }= require("jimp");
 const jsQR = require("jsqr");
 const axios = require("axios");
 const FormData = require("form-data");
 const { ethers, keccak256, toUtf8Bytes } = require("ethers");
+const EC = require('elliptic').ec;
+const ec = new EC('secp256k1');
+const BN = require('bn.js');
 
 require("dotenv").config();
 
@@ -39,12 +42,69 @@ const CONTRACT_ABI = [
 			{
 				"indexed": false,
 				"internalType": "bytes32",
-				"name": "faceHash",
+				"name": "Sx",
 				"type": "bytes32"
+			},
+			{
+				"indexed": false,
+				"internalType": "bytes32",
+				"name": "Sy",
+				"type": "bytes32"
+			},
+			{
+				"indexed": false,
+				"internalType": "string",
+				"name": "salt",
+				"type": "string"
 			}
 		],
 		"name": "Registered",
 		"type": "event"
+	},
+	{
+		"inputs": [],
+		"name": "getAllRegistered",
+		"outputs": [
+			{
+				"internalType": "bytes32[]",
+				"name": "",
+				"type": "bytes32[]"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [
+			{
+				"internalType": "uint256",
+				"name": "index",
+				"type": "uint256"
+			}
+		],
+		"name": "getRegisteredAt",
+		"outputs": [
+			{
+				"internalType": "bytes32",
+				"name": "",
+				"type": "bytes32"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
+	},
+	{
+		"inputs": [],
+		"name": "getRegisteredCount",
+		"outputs": [
+			{
+				"internalType": "uint256",
+				"name": "",
+				"type": "uint256"
+			}
+		],
+		"stateMutability": "view",
+		"type": "function"
 	},
 	{
 		"inputs": [
@@ -54,12 +114,22 @@ const CONTRACT_ABI = [
 				"type": "bytes32"
 			}
 		],
-		"name": "getFaceHash",
+		"name": "getUserData",
 		"outputs": [
 			{
 				"internalType": "bytes32",
-				"name": "",
+				"name": "Sx",
 				"type": "bytes32"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "Sy",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "string",
+				"name": "salt",
+				"type": "string"
 			}
 		],
 		"stateMutability": "view",
@@ -74,8 +144,18 @@ const CONTRACT_ABI = [
 			},
 			{
 				"internalType": "bytes32",
-				"name": "faceHash",
+				"name": "Sx",
 				"type": "bytes32"
+			},
+			{
+				"internalType": "bytes32",
+				"name": "Sy",
+				"type": "bytes32"
+			},
+			{
+				"internalType": "string",
+				"name": "salt",
+				"type": "string"
 			}
 		],
 		"name": "register",
@@ -192,8 +272,23 @@ app.post("/api/v1/register", upload.single("faceImg"), async (req, res) => {
     // 3. Create face hash
     const faceHash = keccak256(toUtf8Bytes(JSON.stringify(faceEmbedding)));
 
-    // 4. Register on blockchain
-    const tx = await contract.register(nidHash, faceHash);
+    // Step 2: derive k from faceHash + salt
+    const salt = crypto.randomBytes(16).toString('hex');
+    const kHash = keccak256(toUtf8Bytes(faceHash + salt));
+    const kBN = ec.keyFromPrivate(kHash.slice(2), 'hex').getPrivate();
+
+    // // Step 3: compute S = k·G
+    const pubPoint = ec.g.mul(kBN);
+    const Sx = pubPoint.getX().toString(16);
+    const Sy = pubPoint.getY().toString(16);
+
+    console.log(faceHash);
+    console.log(Sx);
+    console.log(Sy);
+    console.log(salt);
+
+    //4. Register on blockchain
+    const tx = await contract.register(nidHash, `0x${Sx}`, `0x${Sy}`, salt);
     const receipt = await tx.wait();
 
     // 5. Prepare QR payload
@@ -220,6 +315,14 @@ app.post("/api/v1/register", upload.single("faceImg"), async (req, res) => {
   }
 });
 
+function deriveK_sameAsRegistration(faceHashStr, saltStr) {
+  // IMPORTANT: faceHashStr must be the same string format as at registration (including '0x' and casing)
+  const kHashHex = keccak256(toUtf8Bytes(faceHashStr + saltStr)); // <-- string concat, UTF-8
+  let kBN = new BN(kHashHex.slice(2), 16).umod(ec.curve.n);
+  if (kBN.isZero()) kBN = kBN.iaddn(1); // avoid zero
+  return kBN;
+}
+
 // ---- Login ----
 app.post("/api/v1/login", upload.fields([{ name: "qrCode" }, { name: "faceImg" }]), async (req, res) => {
   try {
@@ -229,7 +332,7 @@ app.post("/api/v1/login", upload.fields([{ name: "qrCode" }, { name: "faceImg" }
 
     if (!password || !qrFile || !faceFile) {
       return res.status(400).json({ ok: false, error: "Missing required fields" });
-    }
+    } 
 
     // 1. Decode QR & decrypt
     const encryptedPayload = await decodeQRCode(qrFile);
@@ -241,8 +344,66 @@ app.post("/api/v1/login", upload.fields([{ name: "qrCode" }, { name: "faceImg" }
     // 3. Compare embeddings
     const isMatch = await compareEmbeddings(faceLogin, qrData.face_reg);
 
+    const [Sx, Sy, salt] = await contract.getUserData(qrData.nidHash);
+
+    console.log("FaceHash : ", qrData.faceHash);
+    console.log("Sx:", Sx);
+    console.log("Sy:", Sy);
+    console.log("Salt:", salt);
+
+    // On server after retrieving pub key (Sx, Sy, salt) from chain
+    const S = ec.curve.point(
+      new BN(Sx.slice(2), 16),
+      new BN(Sy.slice(2), 16)
+    );
+
+    const k = deriveK_sameAsRegistration(qrData.faceHash, salt);
+
+    const Sprime = ec.g.mul(k);
+    const SxChain = new BN(Sx.slice(2), 16);
+    const SyChain = new BN(Sy.slice(2), 16);
+    if (!Sprime.getX().eq(SxChain) || !Sprime.getY().eq(SyChain)) {
+      console.error('k derivation mismatch vs chain S. Check faceHash/salt formatting!');
+      throw new Error('ZKP key derivation does not match registration');
+    }
+
+    // 2. Create challenge t
+    const t = crypto.randomBytes(32);
+    const tHex = t.toString('hex');
+    // 4) Prover creates r, R
+    const r = new BN(crypto.randomBytes(32));       // BN random
+    const R = ec.g.mul(r);
+    const Rhex = Buffer.from(R.encode('array')).toString('hex');  // uncompressed 04||X||Y as hex
+
+    // 5) Compute c using the SAME style for both sides (we'll use hex-string concat here)
+    const cHex = keccak256(toUtf8Bytes(tHex + Rhex + salt));
+    const cBN  = new BN(cHex.slice(2), 16).umod(ec.curve.n);
+
+    // 6) m = r + c*k mod n
+    const m = r.add(cBN.mul(k)).umod(ec.curve.n);
+    // 7) Verifier side (still same request)
+  //Compute M - C, encode to hex, and hash the same way
+    const M = ec.g.mul(m);
+    const C = S.mul(cBN);
+    const MC = M.add(C.neg());
+    const MChex = Buffer.from(MC.encode('array')).toString('hex');
+
+    const checkHex = keccak256(toUtf8Bytes(tHex + MChex + salt));
+
+    // 8) Compare
+    let IsVerified = false;
+    if (checkHex.toLowerCase() === cHex.toLowerCase()) {
+      console.log('✅ Valid proof');
+      IsVerified = true;
+    } else {
+      console.log('❌ Not a valid proof');
+      IsVerified = false;
+    }
+
+    ok = (isMatch & IsVerified);
+
     res.json({
-      ok: true,
+      ok,
       message: "QR decrypted and face verified",
       isMatch,
       qrData,
