@@ -305,8 +305,10 @@ app.post("/api/v1/register", upload.single("faceImg"), async (req, res) => {
     // 7. Generate QR code
     const qrBuffer = await QRCode.toBuffer(JSON.stringify(encryptedPayload));
 
+    const filename = `${crypto.randomBytes(6).toString("hex")}.png`;
     res.setHeader("Content-Type", "image/png");
-    res.setHeader("Content-Disposition", `attachment; filename=${crypto.randomBytes(6).toString("hex")}.png`);
+    res.setHeader("Content-Disposition", `attachment; filename=${filename}`);
+    res.setHeader("X-Filename", filename); // custom header for frontend
     res.send(qrBuffer);
 
   } catch (err) {
